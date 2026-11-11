@@ -1,0 +1,93 @@
+services:
+  # Database Service for Hamilton UI Persistence
+  db:
+    image: postgres:15-alpine
+    container_name: hamilton-postgres-db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=hamilton_metadata
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=strongpassword123
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hamilton_metadata"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hamilton-network
+
+  # Hamilton UI Django Backend Service
+  backend:
+    image: dagworks/ui-backend:latest
+    container_name: hamilton-ui-backend
+    entrypoint: ["/bin/bash", "-c", "cd /code/server && ./entrypoint.sh"]
+    volumes:
+      - backend_data:/data/
+    ports:
+      - "8241:8241"
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=hamilton_metadata
+      - DB_USER=postgres
+      - DB_PASSWORD=strongpassword123
+      - HAMILTON_BLOB_STORE=local
+      - HAMILTON_ENV=local
+      - HAMILTON_LOCAL_BLOB_DIR=/data/blobs
+      - DJANGO_SECRET_KEY=hamilton_secure_django_secret_key_2026
+      - HAMILTON_TELEMETRY_ENABLED=false
+      - HAMILTON_AUTH_MODE=permissive
+      - HAMILTON_ALLOWED_HOSTS=*
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - hamilton-network
+
+  # Hamilton UI React Frontend Service
+  frontend:
+    image: dagworks/ui-frontend:latest
+    container_name: hamilton-ui-frontend
+    ports:
+      - "8242:8242"
+    environment:
+      - NODE_ENV=development
+      - REACT_APP_AUTH_MODE=local
+      - REACT_APP_USE_POSTHOG=false
+      - REACT_APP_API_URL=http://localhost:8241
+      - REACT_APP_HAMILTON_SUB_PATH=
+    depends_on:
+      - backend
+    networks:
+      - hamilton-network
+
+  # Data Pipeline Executable Environment (Python + Jupyter Notebook Sandbox)
+  pipeline-sandbox:
+    image: python:3.11-slim
+    container_name: hamilton-pipeline-sandbox
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    ports:
+      - "8888:8888" # Jupyter Notebook Port
+    command: >
+      bash -c "apt-get update && apt-get install -y graphviz &&
+               pip install -r requirements.txt jupyterlab &&
+               jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=''"
+    environment:
+      - HAMILTON_TELEMETRY_ENABLED=false
+    depends_on:
+      - backend
+    networks:
+      - hamilton-network
+
+volumes:
+  postgres_data:
+  backend_data:
+
+networks:
+  hamilton-network:
+    driver: bridge
